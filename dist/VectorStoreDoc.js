@@ -8,4 +8,4 @@ exports.default = docs;
 if ('undefined' !== typeof module) {
     module.exports = docs;
 }
-//# sourceMappingURL=OpensearchStoreDoc.js.map
+//# sourceMappingURL=VectorStoreDoc.js.map

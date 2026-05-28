@@ -1,11 +1,23 @@
+import { Driver } from './driver/Driver';
+export declare enum DriverName {
+    Opensearch = "opensearch"
+}
 type Options = {
     debug: boolean;
+    driver: DriverName | `${DriverName}`;
     map?: any;
-    index: {
+    canon?: any;
+    table: {
         prefix: string;
         suffix: string;
         map: Record<string, string>;
         exact: string;
+    };
+    index?: {
+        prefix?: string;
+        suffix?: string;
+        map?: Record<string, string>;
+        exact?: string;
     };
     field: {
         zone: {
@@ -26,17 +38,18 @@ type Options = {
             size: number;
         };
     };
-    aws: any;
     opensearch: any;
+    aws: any;
+    pg: any;
 };
-export type OpensearchStoreOptions = Partial<Options>;
-declare function OpensearchStore(this: any, options: Options): {
+export type VectorStoreOptions = Partial<Options>;
+declare function VectorStore(this: any, options: Options): {
     name: string;
     tag: any;
     exportmap: {
         native: () => {
-            client: any;
+            driver: Driver | null;
         };
     };
 };
-export default OpensearchStore;
+export default VectorStore;

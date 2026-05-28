@@ -16,22 +16,38 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
-        node-version: [20.x, 18.x, 16.x, 14.x]
+        os: [ubuntu-latest]
+        node-version: [20.x, 22.x]
 
-    runs-on: ${{ matrix.os }} 
-        
+    runs-on: ${{ matrix.os }}
+
+    services:
+      pgvector:
+        image: pgvector/pgvector:pg16
+        ports:
+          - 5432:5432
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_USER: postgres
+          POSTGRES_DB: postgres
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
     steps:
-    - uses: actions/checkout@v2
+    - uses: actions/checkout@v4
     - name: Use Node.js ${{ matrix.node-version }}
-      uses: actions/setup-node@v1
+      uses: actions/setup-node@v4
       with:
         node-version: ${{ matrix.node-version }}
     - run: npm install
-      # manually install peerdeps for node 12,14
     - run: npm i seneca seneca-entity
     - run: npm run build --if-present
     - run: npm test
+      env:
+        SENECA_VECTOR_PG_URL: postgres://postgres:postgres@localhost:5432/postgres
 
     - name: Coveralls
       uses: coverallsapp/github-action@master
