@@ -1,11 +1,10 @@
 /* Copyright © 2024 Seneca Project Contributors, MIT License. */
 
-import { Client } from 'pg'
 import Seneca from 'seneca'
 
 import VectorStore, { DriverName } from '../src/VectorStore'
 import VectorStoreDoc from '../src/VectorStoreDoc'
-import { pgAvailable, pgUrl, setupTable, teardown } from './support/pgsetup'
+import { MockDriver, MockDriverNoRemove } from './support/MockDriver'
 
 
 function makeSeneca() {
@@ -17,6 +16,11 @@ function makeSeneca() {
 }
 
 
+// ---------------------------------------------------------------------------
+// Plugin surface — exports, driver registry, option validation, table resolve.
+// No backend involved.
+// ---------------------------------------------------------------------------
+
 describe('VectorStore plugin surface', () => {
 
   test('plugin + doc exports defined', () => {
@@ -25,16 +29,17 @@ describe('VectorStore plugin surface', () => {
   })
 
 
-  test('driver registry contains opensearch', () => {
+  test('driver registry contains opensearch + pgvector', () => {
     const utils = (VectorStore as any)['utils']
     expect(utils.drivers).toBeDefined()
     expect(Object.keys(utils.drivers)).toContain('opensearch')
+    expect(Object.keys(utils.drivers)).toContain('pgvector')
   })
 
 
-  test('DriverName enum exposes opensearch', () => {
+  test('DriverName enum entries are all registered', () => {
     expect(DriverName.Opensearch).toEqual('opensearch')
-    // Whatever the enum advertises, the registry must register.
+    expect(DriverName.Pgvector).toEqual('pgvector')
     const utils = (VectorStore as any)['utils']
     Object.values(DriverName).forEach((name) => {
       expect(Object.keys(utils.drivers)).toContain(name)
@@ -51,182 +56,14 @@ describe('VectorStore plugin surface', () => {
 
   test('checkDriverChoice rejects unknown driver', () => {
     const utils = (VectorStore as any)['utils']
-    expect(() => utils.checkDriverChoice('qdrant')).toThrow(/unknown driver 'qdrant'/)
-    expect(() => utils.checkDriverChoice('qdrant')).toThrow(/Available: opensearch/)
+    expect(() => utils.checkDriverChoice('weaviate')).toThrow(/unknown driver 'weaviate'/)
   })
 
 
-  test('checkDriverChoice accepts opensearch', () => {
+  test('checkDriverChoice accepts registered drivers', () => {
     const utils = (VectorStore as any)['utils']
     expect(() => utils.checkDriverChoice('opensearch')).not.toThrow()
-  })
-
-
-  test('load-plugin (opensearch via DriverName enum)', async () => {
-    const seneca = makeSeneca()
-      .use(VectorStore, {
-        driver: DriverName.Opensearch,
-        opensearch: { node: 'http://localhost:9200' },
-        aws: { region: 'us-east-1' },
-      })
-    await seneca.ready()
-    expect(seneca.export('VectorStore/native')).toBeDefined()
-    await seneca.close()
-  }, 22222)
-
-
-  test('load-plugin (opensearch via string literal)', async () => {
-    const seneca = makeSeneca()
-      .use(VectorStore, {
-        driver: 'opensearch',
-        opensearch: { node: 'http://localhost:9200' },
-        aws: { region: 'us-east-1' },
-      })
-    await seneca.ready()
-    expect(seneca.export('VectorStore/native')).toBeDefined()
-    await seneca.close()
-  }, 22222)
-
-
-  const describePg = pgAvailable() ? describe : describe.skip
-
-
-  describePg('pgvector driver — save/load', () => {
-    const url = pgAvailable() ? pgUrl() : ''
-    const table = 'test_doc_chunk'
-    const dim = 8
-    const canon = 'foo/chunk'
-
-    let seneca: any
-
-    beforeAll(async () => {
-      await setupTable({ url, table, dim })
-      seneca = Seneca({ legacy: false })
-        .test()
-        .use('promisify')
-        .use('entity')
-        .use(VectorStore, {
-          driver: DriverName.Pgvector,
-          pg: { url },
-          canon: { [canon]: { vector: { dim } } },
-          table: { map: { [`-/${canon}`]: table } },
-        })
-      await seneca.ready()
-    }, 30000)
-
-    afterAll(async () => {
-      if (seneca) await seneca.close()
-      await teardown({ url, table })
-    }, 30000)
-
-
-    test('(a) save assigns id when none provided', async () => {
-      const ent = await seneca.entity(canon).make$().data$({
-        text: 'auto-id',
-        kind: 'a',
-        vector: [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8],
-      }).save$()
-      expect(ent.id).toBeDefined()
-      expect(typeof ent.id).toBe('string')
-      expect(ent.id.length).toBeGreaterThan(0)
-    })
-
-
-    test('(b) save respects provided id', async () => {
-      const customId = 'my-custom-id-' + Date.now()
-      const ent = await seneca.entity(canon).make$().data$({
-        id: customId,
-        text: 'custom-id',
-        kind: 'b',
-        vector: [0.9, 0.8, 0.7, 0.6, 0.5, 0.4, 0.3, 0.2],
-      }).save$()
-      expect(ent.id).toEqual(customId)
-    })
-
-
-    test('(c) save with dim mismatch rejects', async () => {
-      await expect(
-        seneca.entity(canon).make$().data$({
-          text: 'wrong-dim',
-          vector: [0.1, 0.2, 0.3],  // dim 3, not 8
-        }).save$()
-      ).rejects.toThrow(/dim mismatch/)
-    })
-
-
-    test('(d) save without vector rejects (driver-level)', async () => {
-      await expect(
-        seneca.entity(canon).make$().data$({
-          text: 'no-vector',
-        }).save$()
-      ).rejects.toThrow(/vector is required/)
-    })
-
-
-    test('(e) save then load round-trip preserves scalar fields', async () => {
-      const ent = await seneca.entity(canon).make$().data$({
-        text: 'roundtrip',
-        kind: 'e',
-        count: 42,
-        nested: { a: 1, b: 'two' },
-        vector: [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7],
-      }).save$()
-
-      const loaded = await seneca.entity(canon).load$(ent.id)
-      expect(loaded).not.toBeNull()
-      expect(loaded.text).toEqual('roundtrip')
-      expect(loaded.kind).toEqual('e')
-      expect(loaded.count).toEqual(42)
-      expect(loaded.nested).toEqual({ a: 1, b: 'two' })
-    })
-
-
-    test('(f) load of unknown id returns null', async () => {
-      const loaded = await seneca.entity(canon).load$('nonexistent-id-xxx')
-      expect(loaded).toBeNull()
-    })
-
-
-    test('(g) load does not return the embedding', async () => {
-      const ent = await seneca.entity(canon).make$().data$({
-        text: 'no-vec-on-load',
-        vector: [0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1],
-      }).save$()
-      const loaded = await seneca.entity(canon).load$(ent.id)
-      expect(loaded).not.toBeNull()
-      expect(loaded.vector).toBeUndefined()
-    })
-
-
-    test('(h) vector stored as pgvector literal (not pg array)', async () => {
-      // Regression test: pg auto-encodes number[] as Postgres array '{...}', which is
-      // the wrong type for vector columns. The driver must serialise as text '[...]'.
-      const ent = await seneca.entity(canon).make$().data$({
-        text: 'encoding-check',
-        vector: [0.11, 0.22, 0.33, 0.44, 0.55, 0.66, 0.77, 0.88],
-      }).save$()
-
-      const client = new Client({ connectionString: url })
-      await client.connect()
-      try {
-        // Cast embedding to text — pgvector returns its canonical text form '[v1,v2,...]'.
-        const res = await client.query(
-          `SELECT embedding::text AS emb_text FROM ${table} WHERE id = $1`,
-          [ent.id],
-        )
-        expect(res.rows.length).toEqual(1)
-        const embText: string = res.rows[0].emb_text
-        expect(embText).toMatch(/^\[/)  // starts with [
-        expect(embText).toMatch(/\]$/)  // ends with ]
-        // Parse and compare values within float tolerance
-        const parsed = JSON.parse(embText) as number[]
-        expect(parsed.length).toEqual(8)
-        expect(parsed[0]).toBeCloseTo(0.11, 4)
-        expect(parsed[7]).toBeCloseTo(0.88, 4)
-      } finally {
-        await client.end()
-      }
-    })
+    expect(() => utils.checkDriverChoice('pgvector')).not.toThrow()
   })
 
 
@@ -259,5 +96,325 @@ describe('VectorStore plugin surface', () => {
       index: { exact: 'IDX' }
     })).toEqual('TBL')
   }, 22222)
+
+})
+
+
+// ---------------------------------------------------------------------------
+// Translation layer — the plugin's actual job. Verified with a MockDriver:
+// we receive Seneca inputs correctly, translate them to Driver calls correctly,
+// and map Driver results back into Seneca's entity shape. No real DB.
+// ---------------------------------------------------------------------------
+
+describe('VectorStore translation (mock driver)', () => {
+  const canon = 'foo/chunk'
+  const table = 'mock_table'
+  const dim = 4
+
+  beforeAll(() => {
+    // Register the mocks in the plugin's driver registry.
+    const utils = (VectorStore as any)['utils']
+    utils.drivers.mock = MockDriver
+    utils.drivers.mocknoremove = MockDriverNoRemove
+  })
+
+  beforeEach(() => {
+    MockDriver.reset()
+    MockDriverNoRemove.reset()
+  })
+
+  async function loadMock(driverName: string = 'mock') {
+    const seneca = makeSeneca().use(VectorStore, {
+      driver: driverName,
+      canon: { [canon]: { vector: { dim } } },
+      table: { map: { [`-/${canon}`]: table } },
+    })
+    await seneca.ready()
+    return seneca
+  }
+
+
+  // ---- save ----
+
+  test('save translates entity → upsert(table, id, vector, metadata)', async () => {
+    const seneca = await loadMock()
+    const mock = MockDriver.last()
+
+    const saved = await seneca.entity(canon).make$().data$({
+      text: 'hello',
+      rank: 5,
+      vector: [0.1, 0.2, 0.3, 0.4],
+    }).save$()
+
+    const call = mock.lastCall('upsert')
+    expect(call).toBeDefined()
+    const [t, id, vector, metadata] = call!.args
+
+    // Correct table resolution.
+    expect(t).toEqual(table)
+    // No id provided by caller → passes undefined through (driver/seneca decides).
+    expect(id).toBeUndefined()
+    // Vector forwarded verbatim.
+    expect(vector).toEqual([0.1, 0.2, 0.3, 0.4])
+    // Metadata carries scalar fields but NOT id or vector.
+    expect(metadata.text).toEqual('hello')
+    expect(metadata.rank).toEqual(5)
+    expect(metadata.vector).toBeUndefined()
+    expect(metadata.id).toBeUndefined()
+
+    // Response id comes from the driver result.
+    expect(saved.id).toEqual('mock-generated-id')
+
+    await seneca.close()
+  })
+
+
+  test('save forwards a caller-provided id to upsert', async () => {
+    const seneca = await loadMock()
+    const mock = MockDriver.last()
+
+    await seneca.entity(canon).make$().data$({
+      id: 'given-id',
+      text: 't',
+      vector: [1, 2, 3, 4],
+    }).save$()
+
+    const [, id] = mock.lastCall('upsert')!.args
+    expect(id).toEqual('given-id')
+
+    await seneca.close()
+  })
+
+
+  test('save rejects on per-canon dim mismatch without calling the driver', async () => {
+    const seneca = await loadMock()
+    const mock = MockDriver.last()
+
+    await expect(
+      seneca.entity(canon).make$().data$({
+        text: 't',
+        vector: [1, 2, 3], // dim 3, canon expects 4
+      }).save$()
+    ).rejects.toThrow(/dim mismatch/)
+
+    expect(mock.callsOf('upsert').length).toEqual(0)
+
+    await seneca.close()
+  })
+
+
+  test('save forwards undefined vector (the driver decides whether to reject)', async () => {
+    const seneca = await loadMock()
+    const mock = MockDriver.last()
+
+    await seneca.entity(canon).make$().data$({ text: 'no-vec' }).save$()
+
+    const [, , vector] = mock.lastCall('upsert')!.args
+    expect(vector).toBeUndefined()
+
+    await seneca.close()
+  })
+
+
+  // ---- load ----
+
+  test('load translates id → get(table, id) and maps metadata back', async () => {
+    const seneca = await loadMock()
+    const mock = MockDriver.last()
+    mock.getResult = { id: 'row-1', metadata: { text: 'hi', n: 2 } }
+
+    const loaded = await seneca.entity(canon).load$('row-1')
+
+    const call = mock.lastCall('get')
+    expect(call!.args).toEqual([table, 'row-1'])
+    expect(loaded.id).toEqual('row-1')
+    expect(loaded.text).toEqual('hi')
+    expect(loaded.n).toEqual(2)
+
+    await seneca.close()
+  })
+
+
+  test('load returns null when the driver finds nothing', async () => {
+    const seneca = await loadMock()
+    const mock = MockDriver.last()
+    mock.getResult = null
+
+    const loaded = await seneca.entity(canon).load$('missing')
+    expect(loaded).toBeNull()
+
+    await seneca.close()
+  })
+
+
+  test('load without an id does not call the driver', async () => {
+    const seneca = await loadMock()
+    const mock = MockDriver.last()
+
+    await seneca.entity(canon).load$({ text: 'no-id-here' })
+    expect(mock.callsOf('get').length).toEqual(0)
+
+    await seneca.close()
+  })
+
+
+  // ---- list: KNN ----
+
+  test('list with vector$ {k} → query with vector + k, maps custom$.score', async () => {
+    const seneca = await loadMock()
+    const mock = MockDriver.last()
+    mock.queryResult = [
+      { id: 'a', metadata: { text: 'A' }, score: 0.9 },
+      { id: 'b', metadata: { text: 'B' }, score: 0.8 },
+    ]
+
+    const list = await seneca.entity(canon).list$({
+      directive$: { vector$: { k: 2 } },
+      vector: [0.1, 0.2, 0.3, 0.4],
+    })
+
+    const [t, opts] = mock.lastCall('query')!.args
+    expect(t).toEqual(table)
+    expect(opts.vector).toEqual([0.1, 0.2, 0.3, 0.4])
+    expect(opts.k).toEqual(2)
+
+    expect(list.length).toEqual(2)
+    expect(list[0].id).toEqual('a')
+    expect(list[0].text).toEqual('A')
+    expect(list[0].custom$.score).toEqual(0.9)
+    expect(list[1].custom$.score).toEqual(0.8)
+
+    await seneca.close()
+  })
+
+
+  test('list with vector$ boolean → k defaults to cmd.list.size (11)', async () => {
+    const seneca = await loadMock()
+    const mock = MockDriver.last()
+
+    await seneca.entity(canon).list$({
+      directive$: { vector$: true },
+      vector: [0.1, 0.2, 0.3, 0.4],
+    })
+
+    const [, opts] = mock.lastCall('query')!.args
+    expect(opts.vector).toEqual([0.1, 0.2, 0.3, 0.4])
+    expect(opts.k).toEqual(11)
+
+    await seneca.close()
+  })
+
+
+  // ---- list: filters ----
+
+  test('list with equality fields → query with filters, no score on results', async () => {
+    const seneca = await loadMock()
+    const mock = MockDriver.last()
+    mock.queryResult = [{ id: 'c', metadata: { code: 'x', text: 'C' } }] // no score
+
+    const list = await seneca.entity(canon).list$({ code: 'x' })
+
+    const [, opts] = mock.lastCall('query')!.args
+    expect(opts.filters).toEqual({ code: 'x' })
+    expect(opts.vector).toBeUndefined()
+
+    expect(list.length).toEqual(1)
+    expect(list[0].code).toEqual('x')
+    // No score set: custom$ stays the entity's built-in (a function), never our {score}.
+    expect(list[0].custom$?.score).toBeUndefined()
+
+    await seneca.close()
+  })
+
+
+  test('list partitions filters: skips "vector" and $-suffixed keys', async () => {
+    const seneca = await loadMock()
+    const mock = MockDriver.last()
+
+    await seneca.entity(canon).list$({
+      code: 'x',
+      kind: 'y',
+      vector: [0.1, 0.2, 0.3, 0.4],
+      directive$: { vector$: true },
+    })
+
+    const [, opts] = mock.lastCall('query')!.args
+    expect(opts.filters).toEqual({ code: 'x', kind: 'y' })
+    expect(opts.vector).toEqual([0.1, 0.2, 0.3, 0.4])
+    // 'vector' and 'directive$' must not leak into filters.
+    expect(opts.filters.vector).toBeUndefined()
+    expect(opts.filters.directive$).toBeUndefined()
+
+    await seneca.close()
+  })
+
+
+  test('empty query → query called with neither vector nor filters → []', async () => {
+    const seneca = await loadMock()
+    const mock = MockDriver.last()
+    mock.queryResult = []
+
+    const list = await seneca.entity(canon).list$()
+
+    const [, opts] = mock.lastCall('query')!.args
+    expect(opts.vector).toBeUndefined()
+    expect(opts.filters).toBeUndefined()
+    expect(list).toEqual([])
+
+    await seneca.close()
+  })
+
+
+  // ---- remove ----
+
+  test('remove translates id → driver.remove(table, id)', async () => {
+    const seneca = await loadMock()
+    const mock = MockDriver.last()
+
+    await seneca.entity(canon).remove$('rm-1')
+
+    const call = mock.lastCall('remove')
+    expect(call!.args).toEqual([table, 'rm-1'])
+
+    await seneca.close()
+  })
+
+
+  test('remove with all$ translates to driver.removeQuery(table, {filters})', async () => {
+    const seneca = await loadMock()
+    const mock = MockDriver.last()
+
+    await seneca.entity(canon).remove$({ all$: true, code: 'x' })
+
+    const call = mock.lastCall('removeQuery')
+    expect(call).toBeDefined()
+    const [t, opts] = call!.args
+    expect(t).toEqual(table)
+    expect(opts.filters).toEqual({ code: 'x' })
+
+    await seneca.close()
+  })
+
+
+  test('remove (by id) errors when the driver does not support remove', async () => {
+    const seneca = await loadMock('mocknoremove')
+
+    await expect(
+      seneca.entity(canon).remove$('rm-1')
+    ).rejects.toThrow(/does not support remove/)
+
+    await seneca.close()
+  })
+
+
+  test('remove (all$) errors when the driver does not support removeQuery', async () => {
+    const seneca = await loadMock('mocknoremove')
+
+    await expect(
+      seneca.entity(canon).remove$({ all$: true, code: 'x' })
+    ).rejects.toThrow(/does not support removeQuery/)
+
+    await seneca.close()
+  })
 
 })

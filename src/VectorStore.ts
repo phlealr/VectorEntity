@@ -235,11 +235,7 @@ function VectorStore(this: any, options: Options) {
   seneca.prepare(async function (this: any) {
     const driverOpts = buildDriverOpts(options)
     driver = new DriverClass(driverOpts)
-    // eslint-disable-next-line no-console
-    console.log('[DEBUG VectorStore] prepare: driver instantiated, calling connect()')
     await driver.connect()
-    // eslint-disable-next-line no-console
-    console.log('[DEBUG VectorStore] prepare: connect() resolved')
   })
 
   return {
