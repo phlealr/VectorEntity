@@ -69,7 +69,15 @@ function VectorStore(this: any, options: Options) {
   const init = seneca.export('entity/init')
 
   let desc: any = 'VectorStore'
-  let driver: Driver | null = null
+
+  // The driver instance is created eagerly (a pure constructor call — no I/O). The
+  // connection is opened from the `init:<store.name>` action registered below — the
+  // canonical Seneca store pattern (cf. seneca-postgres-store): Seneca runs the init
+  // action during ready(), after the store is registered and before any store message
+  // is routed, so the connection is live by the time save/load/list run. We do NOT use
+  // a seneca-promisify `prepare` hook: opening the connection there makes the store's
+  // `close` fire spuriously during plugin init (tearing the connection back down).
+  const driver: Driver = new DriverClass(buildDriverOpts(options))
 
   const store = {
     name: 'VectorStore',
@@ -120,7 +128,7 @@ function VectorStore(this: any, options: Options) {
         }
       })
 
-      driver!
+      driver
         .upsert(table, id, vector, metadata)
         .then((res) => {
           ent.id = res.id
@@ -135,7 +143,7 @@ function VectorStore(this: any, options: Options) {
       const q = msg.q || {}
 
       if (null != q.id) {
-        driver!
+        driver
           .get(table, q.id)
           .then((row) => {
             if (row === null) return reply(null)
@@ -156,7 +164,7 @@ function VectorStore(this: any, options: Options) {
 
       const queryOpts = buildDriverQueryOpts(q, msg, options)
 
-      driver!
+      driver
         .query(table, queryOpts)
         .then((rows) => {
           const list = rows.map((row) => {
@@ -177,14 +185,7 @@ function VectorStore(this: any, options: Options) {
       const id = q.id
 
       if (null != id) {
-        if (!driver!.remove) {
-          return reply(
-            new Error(
-              `VectorStore: driver '${options.driver}' does not support remove`,
-            ),
-          )
-        }
-        driver!
+        driver
           .remove(table, id)
           .then(() => reply(null))
           .catch((err: any) => {
@@ -194,15 +195,8 @@ function VectorStore(this: any, options: Options) {
             reply(err)
           })
       } else if (true === q.all$) {
-        if (!driver!.removeQuery) {
-          return reply(
-            new Error(
-              `VectorStore: driver '${options.driver}' does not support removeQuery`,
-            ),
-          )
-        }
         const queryOpts = buildDriverQueryOpts(q, msg, options)
-        driver!
+        driver
           .removeQuery(table, queryOpts)
           .then(() => reply(null))
           .catch((err: any) => reply(err))
@@ -213,14 +207,10 @@ function VectorStore(this: any, options: Options) {
 
     close: function (this: any, _msg: any, reply: any) {
       this.log.debug('close', desc)
-      if (driver) {
-        driver
-          .close()
-          .then(() => reply())
-          .catch(reply)
-      } else {
-        reply()
-      }
+      driver
+        .close()
+        .then(() => reply())
+        .catch(reply)
     },
 
     // Legacy native accessor — surfaces the driver (and, by extension, the underlying client).
@@ -232,10 +222,20 @@ function VectorStore(this: any, options: Options) {
   const meta = init(seneca, options, store)
   desc = meta.desc
 
-  seneca.prepare(async function (this: any) {
-    const driverOpts = buildDriverOpts(options)
-    driver = new DriverClass(driverOpts)
-    await driver.connect()
+  // Open the connection from the store init action — the same pattern as
+  // seneca-postgres-store: `seneca.add({init: store.name, tag: meta.tag}, ...)`.
+  // Seneca runs it during ready(), after the store is registered and before any store
+  // message is routed, so the connection is live before the first save/load/list.
+  // Shutdown is handled by the store's `close` cmd (driver.close → pool.end()).
+  seneca.add({ init: store.name, tag: meta.tag }, function (
+    this: any,
+    _msg: any,
+    done: any,
+  ) {
+    driver
+      .connect()
+      .then(() => done())
+      .catch(done)
   })
 
   return {

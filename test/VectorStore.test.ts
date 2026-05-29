@@ -4,7 +4,7 @@ import Seneca from 'seneca'
 
 import VectorStore, { DriverName } from '../src/VectorStore'
 import VectorStoreDoc from '../src/VectorStoreDoc'
-import { MockDriver, MockDriverNoRemove } from './support/MockDriver'
+import { MockDriver } from './support/MockDriver'
 
 
 function makeSeneca() {
@@ -112,15 +112,13 @@ describe('VectorStore translation (mock driver)', () => {
   const dim = 4
 
   beforeAll(() => {
-    // Register the mocks in the plugin's driver registry.
+    // Register the mock in the plugin's driver registry.
     const utils = (VectorStore as any)['utils']
     utils.drivers.mock = MockDriver
-    utils.drivers.mocknoremove = MockDriverNoRemove
   })
 
   beforeEach(() => {
     MockDriver.reset()
-    MockDriverNoRemove.reset()
   })
 
   async function loadMock(driverName: string = 'mock') {
@@ -391,28 +389,6 @@ describe('VectorStore translation (mock driver)', () => {
     const [t, opts] = call!.args
     expect(t).toEqual(table)
     expect(opts.filters).toEqual({ code: 'x' })
-
-    await seneca.close()
-  })
-
-
-  test('remove (by id) errors when the driver does not support remove', async () => {
-    const seneca = await loadMock('mocknoremove')
-
-    await expect(
-      seneca.entity(canon).remove$('rm-1')
-    ).rejects.toThrow(/does not support remove/)
-
-    await seneca.close()
-  })
-
-
-  test('remove (all$) errors when the driver does not support removeQuery', async () => {
-    const seneca = await loadMock('mocknoremove')
-
-    await expect(
-      seneca.entity(canon).remove$({ all$: true, code: 'x' })
-    ).rejects.toThrow(/does not support removeQuery/)
 
     await seneca.close()
   })

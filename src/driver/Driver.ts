@@ -37,6 +37,6 @@ export interface Driver {
 
   query(table: string, opts: DriverQueryOpts): Promise<DriverQueryRow[]>
 
-  remove?(table: string, id: string): Promise<void>
-  removeQuery?(table: string, opts: DriverQueryOpts): Promise<void>
+  remove(table: string, id: string): Promise<void>
+  removeQuery(table: string, opts: DriverQueryOpts): Promise<void>
 }

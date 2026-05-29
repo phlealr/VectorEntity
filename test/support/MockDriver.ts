@@ -86,28 +86,3 @@ export class MockDriver implements Driver {
     return matching[matching.length - 1]
   }
 }
-
-
-// Variant without remove/removeQuery — used to test the plugin's "driver does not
-// support remove" error path.
-export class MockDriverNoRemove implements Driver {
-  static instances: MockDriverNoRemove[] = []
-  static last(): MockDriverNoRemove {
-    return MockDriverNoRemove.instances[MockDriverNoRemove.instances.length - 1]
-  }
-  static reset(): void {
-    MockDriverNoRemove.instances = []
-  }
-
-  calls: MockCall[] = []
-
-  constructor(public opts: any) {
-    MockDriverNoRemove.instances.push(this)
-  }
-  async connect(): Promise<void> { this.calls.push({ method: 'connect', args: [] }) }
-  async close(): Promise<void> { this.calls.push({ method: 'close', args: [] }) }
-  async upsert(): Promise<DriverUpsertResult> { return { id: 'x' } }
-  async get(): Promise<DriverGetResult | null> { return null }
-  async query(): Promise<DriverQueryRow[]> { return [] }
-  // intentionally no remove / removeQuery
-}
