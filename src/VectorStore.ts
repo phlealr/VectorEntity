@@ -4,6 +4,7 @@ import { Gubu } from 'gubu'
 
 import { Driver, DriverQueryOpts } from './driver/Driver'
 import { OpensearchDriver } from './driver/OpensearchDriver'
+import { PgvectorDriver } from './driver/PgvectorDriver'
 
 const { Open, Any } = Gubu
 
@@ -12,7 +13,7 @@ const { Open, Any } = Gubu
 // `drivers` registry below. TypeScript narrows `options.driver` to these names.
 export enum DriverName {
   Opensearch = 'opensearch',
-  // Pgvector = 'pgvector',  // arrives in PR2
+  Pgvector = 'pgvector',
 }
 
 
@@ -54,6 +55,7 @@ export type VectorStoreOptions = Partial<Options>
 // the three to stay in sync — TypeScript errors if any enum value lacks a registry entry.
 const drivers: Record<DriverName, new (opts: any) => Driver> = {
   [DriverName.Opensearch]: OpensearchDriver,
+  [DriverName.Pgvector]: PgvectorDriver,
 }
 
 function VectorStore(this: any, options: Options) {
@@ -75,6 +77,7 @@ function VectorStore(this: any, options: Options) {
     save: function (this: any, msg: any, reply: any) {
       const ent = msg.ent
       const canon = ent.canon$({ object: true })
+      const canonstr: string = ent.canon$({ string: true })
       const table = resolveTable(ent, options)
 
       const data = ent.data$(false)
@@ -83,6 +86,26 @@ function VectorStore(this: any, options: Options) {
       const metadata: Record<string, any> = { ...data }
       delete metadata.id
       delete metadata.vector
+
+      // Per-canon dim validation. options.canon accepts either the full canon string
+      // ('-/foo/chunk') or the base/name shorthand ('foo/chunk') as a key.
+      const dim = lookupCanonDim(options.canon, canonstr)
+      if (dim != null && vector !== undefined) {
+        if (!Array.isArray(vector)) {
+          return reply(
+            new Error(
+              `VectorStore: vector must be a number[] for ${canonstr}`,
+            ),
+          )
+        }
+        if (vector.length !== dim) {
+          return reply(
+            new Error(
+              `VectorStore: vector dim mismatch for ${canonstr} — expected ${dim}, got ${vector.length}`,
+            ),
+          )
+        }
+      }
 
       // Inject canon-derived fields per options.field config. No-op when field.{n}.name is ''.
       const fieldOpts: any = options.field || {}
@@ -212,7 +235,11 @@ function VectorStore(this: any, options: Options) {
   seneca.prepare(async function (this: any) {
     const driverOpts = buildDriverOpts(options)
     driver = new DriverClass(driverOpts)
+    // eslint-disable-next-line no-console
+    console.log('[DEBUG VectorStore] prepare: driver instantiated, calling connect()')
     await driver.connect()
+    // eslint-disable-next-line no-console
+    console.log('[DEBUG VectorStore] prepare: connect() resolved')
   })
 
   return {
@@ -249,8 +276,10 @@ function buildDriverOpts(options: Options): any {
         field: options.field,
         cmd: options.cmd,
       }
-    // case DriverName.Pgvector:  // PR2
-    //   return { pg: options.pg, canon: options.canon }
+    case DriverName.Pgvector:
+      return {
+        pg: options.pg,
+      }
     default:
       return options
   }
@@ -285,6 +314,17 @@ function buildDriverQueryOpts(
   }
   return out
 }
+
+// Look up a per-canon vector dim, accepting either the full canon string ('-/foo/chunk')
+// or the base/name shorthand ('foo/chunk') as a key in options.canon.
+function lookupCanonDim(canonOpts: any, canonstr: string): number | null {
+  if (!canonOpts || 'object' !== typeof canonOpts) return null
+  const shorthand = canonstr.replace(/^-\//, '')
+  const entry = canonOpts[canonstr] ?? canonOpts[shorthand]
+  if (!entry || !entry.vector || typeof entry.vector.dim !== 'number') return null
+  return entry.vector.dim
+}
+
 
 // Renamed from resolveIndex. Reads options.table; falls back to options.index for backward-compat.
 function resolveTable(ent: any, options: Options): string {

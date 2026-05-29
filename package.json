@@ -69,6 +69,7 @@
   "dependencies": {
     "@aws-sdk/credential-provider-node": "^3.525.0",
     "@opensearch-project/opensearch": "^2.5.0",
-    "pg": "^8.11.0"
+    "pg": "^8.11.0",
+    "pgvector": "^0.2.1"
   }
 }
