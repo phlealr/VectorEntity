@@ -1,18 +1,63 @@
-name: 'TODO'
-on: ['push']
+# =============================================================================
+# DISABLED — this workflow does not run.
+#
+# It used `senecajs/todo-to-issue-action@master` to turn `TODO:` comments into
+# GitHub issues on every push, but that action is broken at @master:
+#   * its Docker image crashes with
+#       TypeError: 'type' object is not subscriptable
+#     (a urllib3 / Python-version bug baked into the action's image — not
+#      fixable from this repo), and
+#   * its inputs (REPO / BEFORE / SHA / TOKEN / LABEL / COMMENT_MARKER /
+#     INCLUDE_EXT) are stale — the action now only accepts entryPoint / args.
+#
+# To RE-ENABLE, switch to the maintained upstream action and grant issue
+# write permission (it auto-detects languages, uses GITHUB_TOKEN, and needs
+# no INCLUDE_EXT/COMMENT_MARKER):
+#
+#   name: 'TODO to Issue'
+#   on: ['push']
+#   permissions:
+#     contents: read
+#     issues: write
+#   jobs:
+#     todo:
+#       runs-on: ubuntu-latest
+#       steps:
+#         - uses: actions/checkout@v4
+#         - uses: alstr/todo-to-issue-action@v5
+#
+# Original (broken) configuration, kept for reference:
+#
+#   name: 'TODO'
+#   on: ['push']
+#   jobs:
+#     build:
+#       runs-on: 'ubuntu-latest'
+#       steps:
+#         - uses: 'actions/checkout@master'
+#         - name: 'todo-to-issue'
+#           uses: 'senecajs/todo-to-issue-action@master'
+#           with:
+#             REPO: ${{ github.repository }}
+#             BEFORE: ${{ github.event.before }}
+#             SHA: ${{ github.sha }}
+#             TOKEN: ${{ secrets.GITHUB_TOKEN }}
+#             LABEL: 'TODO:'
+#             COMMENT_MARKER: '//'
+#             INCLUDE_EXT: '.js,.md,.ts'
+#           id: 'todo'
+# =============================================================================
+
+name: 'TODO (disabled)'
+
+# Manual-only trigger; never runs on push.
+on:
+  workflow_dispatch:
+
 jobs:
-  build:
-    runs-on: 'ubuntu-latest'
+  disabled:
+    # Hard-disabled: this job is always skipped.
+    if: ${{ false }}
+    runs-on: ubuntu-latest
     steps:
-      - uses: 'actions/checkout@master'
-      - name: 'todo-to-issue'
-        uses: 'senecajs/todo-to-issue-action@master'
-        with:
-          REPO: ${{ github.repository }}
-          BEFORE: ${{ github.event.before }}
-          SHA: ${{ github.sha }}
-          TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          LABEL: 'TODO:'
-          COMMENT_MARKER: '//'
-          INCLUDE_EXT: '.js,.md,.ts'
-        id: 'todo'
+      - run: echo "todo-to-issue is disabled — see the comment block at the top of this file."
