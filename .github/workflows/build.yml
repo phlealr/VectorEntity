@@ -1,4 +1,5 @@
-# This workflow will do a clean install of node dependencies, build the source code and run tests across different versions of node
+# This workflow does a clean install of node dependencies, builds the source
+# code and runs tests across multiple Node versions and operating systems.
 # For more information see: https://help.github.com/actions/language-and-framework-guides/using-nodejs-with-github-actions
 
 name: build
@@ -10,16 +11,45 @@ on:
     branches: [ main ]
 
 jobs:
+  # Cross-platform build + unit / mock-driver tests.
+  #
+  # Service containers can only run on Linux runners, so the live-pgvector
+  # end-to-end suite lives in the `e2e-pg` job below. Here SENECA_VECTOR_PG_URL
+  # (and the OpenSearch env vars) are unset, so those integration suites skip
+  # cleanly and only the platform-independent tests run.
   build:
-    timeout-minutes: 6
+    timeout-minutes: 10
 
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest]
-        node-version: [20.x, 22.x]
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        node-version: [24.x, latest]
 
     runs-on: ${{ matrix.os }}
+
+    steps:
+    - uses: actions/checkout@v4
+    - name: Use Node.js ${{ matrix.node-version }}
+      uses: actions/setup-node@v4
+      with:
+        node-version: ${{ matrix.node-version }}
+    - run: npm install
+    - run: npm i seneca seneca-entity
+    - run: npm run build --if-present
+    - run: npm test
+
+  # Linux-only end-to-end suite against a real pgvector database.
+  # Service containers are supported on Linux runners only.
+  e2e-pg:
+    timeout-minutes: 10
+
+    strategy:
+      fail-fast: false
+      matrix:
+        node-version: [24.x, latest]
+
+    runs-on: ubuntu-latest
 
     services:
       pgvector:
