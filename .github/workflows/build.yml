@@ -6,9 +6,7 @@ name: build
 
 on:
   push:
-    branches: [ main ]
   pull_request:
-    branches: [ main ]
 
 jobs:
   # Cross-platform build + unit / mock-driver tests.
